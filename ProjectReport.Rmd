@@ -146,7 +146,7 @@ It looks like trying 8 random variables at each tree split produces the best out
 Do we need to perform cross-validation, and if so, how many randomly resampled subsets should we take?
 
 ```{r, out.width = '33%', fig.show = "hold"}
-n<-c(2,4,8,10,15,20,30); fitaccs<-array(data=NA,dim=c(n-1,4))  ## Store the fit accuracies for models with up to n cross-validations
+n<-c(2,4,8,10,15,20,30); fitaccs<-array(data=NA,dim=c(length(n),4))  ## Store the fit accuracies for models with up to n cross-validations
 for (i in 1:length(n)) {
   set.seed(12345)
   modFit<-train(data=finaltrain,finaltrain$classe~.,method="rf",metric="Accuracy",preProcess="pca",importance=TRUE,trControl=trainControl(method="cv",p=0.7,number=n[i]),tuneGrid=data.frame(.mtry=8))
