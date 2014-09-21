@@ -134,7 +134,7 @@ It looks like 26 components is all that we need to capture 95% of the variance i
 Our classes are fairly balanced, so we have decided to use a random forest model to predict the "classe" variable, and we wish to tune the relevant values using the following code:
 
 ```{r, out.width = '50%'}
-tuneRF(finaltrain[,-53],finaltrain[,53],mtryStart=2,ntreeTry=50,stepFactor=2,improve=0.01,trace=TRUE,plot=TRUE,doBest=TRUE)
+tuneRF(finaltrain[,-53],finaltrain[,53],mtryStart=2,ntreeTry=50,stepFactor=2,improve=0.05,trace=TRUE,plot=TRUE,doBest=TRUE)
 ```
 
 It looks like trying 8 random variables at each tree split produces the best outcome, with an Out-Of-Bag error estimate of 0.29%. So we will explicitly set this parameter when we call the train() function.
