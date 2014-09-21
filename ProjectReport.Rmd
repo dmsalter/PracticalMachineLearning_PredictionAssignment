@@ -44,7 +44,7 @@ NApercol<-rep(NA,ncol(training))
 for (i in 1:ncol(training)) { NApercol[i]<-sum(is.na(training[,i])) }
 ```
 
-It turns out that the 67 columns with NAs have exactly 19,216 of them. Why is that? What is similar or different about the 406 rows that do not have NA values and make up only 2.1% of the total number of observations? The following code identifies the suspect rows and reveals which column variables have nearly identical values (or zero variability):
+It turns out that the 67 columns with NAs have exactly 19,216 of them. Why is that? What is similar or different about the 406 rows that do not have NA values and make up only about 2.1% of the total number of observations? The following code identifies the suspect rows (skipping some exploratory code) and reveals which column variables have nearly identical values (or zero variability):
 
 ```{r, out.width = '200%'}
 suspectrow<-rep(NA,nrow(training))
@@ -52,24 +52,24 @@ for (i in 1:nrow(training)) { suspectrow[i]<-training$new_window[i]=="yes" }
 zerovarcol<-nearZeroVar(training[suspectrow,]); names(training[zerovarcol])
 ```
 
-In most cases, the variables are columns with missing values or divide by 0 errors. Only 1 column variable (training$new_window) has the same value for suspect row observations. And it turns out that this is the variable that makes these rows different! With some additional investigation, the rows where this variable is set to 'yes' appear to be summary entries, and are fundamentally different than the other 19,216 rows that are instantaneous measurements of motion. Thus, we will remove these rows (and the columns with NA values) from the training data set using the following code:
+In most cases, the variables are columns with missing values or divide by 0 errors. Only 1 column variable has the same value for each suspect row observation. And it turns out that this is the variable that makes these rows different! With some additional investigation, the rows where the training$new_window variable is set to 'yes' appear to be summary entries, and are fundamentally different than the other 19,216 rows that are instantaneous measurements of motion. Thus, we will remove these rows (and the columns with NA values) from the training data set using the following code:
 
 ```{r}
-subtrain<-training[!suspectrow,NApercol==0]
-subtest<-testing[,NApercol==0]  ## Perform the same operations on the testing data set
+subtrain<-training[!suspectrow,NApercol==0]  ## Remove suspect rows and NA columns
+subtest<-testing[,NApercol==0]  ## Perform the same column operations on the testing data set
 ```
 
 Now we have 19,216 training observation and 93 variables. While inspecting our new subtrain data set, we notice that there are still a lot of missing values, so we also want to remove those columns, and we use this code to identify those columns:
 
 ```{r}
 removecol<-rep(NA,ncol(subtrain))
-for (i in 1:ncol(subtrain)) { removecol[i]<-sd(subtrain[,i])==0 }  ## Identifies columns with std dev of 0
+for (i in 1:ncol(subtrain)) { removecol[i]<-sd(subtrain[,i])==0 }  ## Identifies columns with a standard deviation of 0
 ```
 
 Finally, we are going to eliminate all of the metadata from the analysis (first 7 columns). Because we are primarily interested in classifying the type of motion recorded by the accelerometers, we do not want the model to use the metadata information to group by factors that are irrelevant to categorizing the motion (or be confused by them).
 
 ```{r}
-removecol[1:7]=TRUE  ## Prepares first 7 columns to be dropped in next step
+removecol[1:7]=TRUE  ## Prepares the first 7 columns to be dropped in next step
 finaltrain<-subtrain[,!removecol]
 finaltest<-subtest[,!removecol]
 ```
@@ -92,7 +92,7 @@ qplot(finaltrain$total_accel_forearm,finaltrain$total_accel_dumbbell,colour=fina
 In these data, we notice one outlier that is worth inspecting further. It looks a little odd compared to all other points, and might mean it will take longer for our model to converge, so we will remove it and inspect the plots above once more. Here is how we remove a single rogue row:
 
 ```{r}
-outlier<-which.max(finaltrain$total_accel_forearm)  ## Find indice of the outlying point
+outlier<-which.max(finaltrain$total_accel_forearm)  ## Find the indice of the outlying point
 finaltrain<-finaltrain[-outlier,]  ## Remove this observation from the training set
 ```
 
@@ -105,7 +105,7 @@ Since we have 52 predictor variables, it might be useful to try and pre-process 
 ```{r, echo=TRUE, eval=FALSE}
 corr<-abs(cor(finaltrain[,-53]))  ## Search for correlated predictors
 diag(corr)<-0
-which(corr>0.90,arr.ind=TRUE)  ## Identify combinations that are 90% correlated
+which(corr>0.90,arr.ind=TRUE)  ## Identify combinations that are at least 90% correlated
 ```
 
 We have lots of similar data, so we should preprocess with PCA and use a cross-validation method.
@@ -146,27 +146,27 @@ It looks like trying 8 random variables at each tree split produces the best out
 Do we need to perform cross-validation, and if so, how many randomly resampled subsets should we take?
 
 ```{r, out.width = '50%', fig.show = "hold", message=FALSE, warning=FALSE}
-n<-c(2,3,4,5,6,10,20,30); fitaccs<-array(data=NA,dim=c(length(n),4))  ## Accuracies for models with up to n(i) cross-validations
+n<-c(2,3,4,5,6,10,20,30); fitaccs<-array(data=NA,dim=c(length(n),4))  ## Accuracies for models with up to n[i] cross-validations
 for (i in 1:length(n)) {
   set.seed(12345)
   modFit<-train(data=finaltrain,finaltrain$classe~.,method="rf",metric="Accuracy",preProcess="pca",trControl=trainControl(method="cv",p=0.7,number=n[i]),tuneGrid=data.frame(.mtry=8),ntree=100)
-  fitaccs[i,]<-c(n[i],modFit$results$Accuracy,mean(modFit$finalModel$err.rate),modFit$times$everything[[3]])
+  fitaccs[i,]<-c(n[i],100*modFit$results$Accuracy,100*mean(modFit$finalModel$err.rate),modFit$times$everything[[3]]/60)
 }
-plot(as.factor(fitaccs[,1]),100*fitaccs[,2],xlab="Number of Cross-Validations",ylab="Model Accuracy Percentage",ylim=c(95,100))
+plot(as.factor(fitaccs[,1]),fitaccs[,2],xlab="Number of Cross-Validations",ylab="Model Accuracy Percentage",ylim=c(95,100))
 abline(h=99,col="red")
-plot(as.factor(fitaccs[,1]),100*fitaccs[,3],xlab="Number of Cross-Validations",ylab="Mean Out-Of-Sample Error Rate")
-plot(as.factor(fitaccs[,1]),fitaccs[,4]/60,xlab="Number of Cross-Validations",ylab="Computation Time (in minutes)")
+plot(as.factor(fitaccs[,1]),fitaccs[,3],xlab="Number of Cross-Validations",ylab="Mean Out-Of-Sample Error Rate")
+plot(as.factor(fitaccs[,1]),fitaccs[,4],xlab="Number of Cross-Validations",ylab="Computation Time (in minutes)")
 plot(modFit$finalModel,use.n=TRUE,all=TRUE,cex=0.8)  ## Determine how many trees are necessary
 ```
 
 ```{r, echo=FALSE, eval=TRUE}
-colnames(fitaccs)<-c("crosses","accuracy","error_rate","comp_time")
+colnames(fitaccs)<-c("n","accuracy","error_rate","comp_time")
 fitaccs
 ```
 
-With just 2 cross-validations, our model fit completes in less than 1 minute of total computation time with a resampling accuracy of 96.2%. Applying this model achieves 19/20 correct test predictions, or approximately 95% of the test cases are predicted accurately, as we might have expected given our estimated resampling accuracy. Therefore, we might do slightly better by increasing the number of cross-validations performed (at the expense of computation time). Lastly, from the fourth plot, we can see that it is possible to speed up the fitting time by limiting the number of trees to be about 100, instead of the default 500. 
+With just 2 cross-validations, our model fit completes in less than 1 minute of total computation time with a resampling accuracy of 96.1%. Applying this model achieves 19/20 correct test predictions, or approximately 95% of the test cases are predicted accurately, as we might have expected given our estimated resampling accuracy. Therefore, we might do slightly better by increasing the number of cross-validations performed (at the expense of computation time). Lastly, from the fourth plot, we can see that it is possible to speed up the fitting time by limiting the number of trees to be about 100, instead of the default 500. 
 
-With 30 cross-validations, we achieve 98.1% accuracy (an increase of 1.9%) and a mean out-of-sample error rate of 4.6%. This computation takes 7 minutes to complete, but we now correctly predict the "classe" variable for 20/20 test observations.
+With 30 cross-validations, we achieve 98.2% accuracy (an increase of 2.1%) with a mean out-of-sample error rate of 4.7%. This computation takes 5.6 minutes to complete, but we now correctly predict the "classe" variable for 20/20 test observations.
 
 <hr>
 
@@ -178,7 +178,7 @@ Our best accuracy at this point is 98.1% and our confusion matrix looks like thi
 modFit$finalModel$confusion
 ````
 
-To improve our accuracy and our out-of-sample rates, we might try increasing our PCA threshold from 95% to 99%, increasing the number of trees calculated, or not performing PCA pre-processing at all. By reducing the number of components or trees, we may save computation time, but we sacrifice accuracy and an understanding of the importance of each variable (or accelerometer measurement). For example, we can plot the importance of each predictor variable using the varImp() function, as below:
+To improve our accuracy and our out-of-sample rates (currently up to 4.7%), we might try increasing our PCA threshold from 95% to 99%, increasing the number of trees calculated, or not performing PCA pre-processing at all. By reducing the number of components or the number of trees, we may save computation time, but we sacrifice accuracy and an understanding of the importance of each variable (or accelerometer measurement). For example, we can plot the importance of each predictor variable using the varImp() function, as below:
 
 ```{r}
 plot(varImp(modFit))
