@@ -1,0 +1,195 @@
+---
+title: "Practical Machine Learning - Prediction Assignment"
+output: html_document
+---
+
+Submitted by course participant D.M. Salter on 20 September 2014.
+
+<hr>
+
+**Project Background**: One thing that people regularly do is to quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we analyze data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants that were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+**Project Purpose**: The goal of our project is to predict the manner in which the participant did the exercise (the "classe" variable) using any or all of the other variables available. The following is a report describing how we built our model, how we used cross validation, what we think the expected out of sample error is, why we made the choices that we did, and how we used our prediction model to predict 20 additional test cases. 
+
+**Project Data**: Our data was provided by http://groupware.les.inf.puc-rio.br/har
+
+<hr>
+
+**Step 1: Loading and Summarizing the Data**
+
+We start by loading the predefined training and testing data sets from our local directory:
+
+```{r, results='markup', eval=TRUE, message=FALSE}
+setwd("~/Development/practicalmachine")  ## Sets the working directory
+library(caret); library (randomForest)  ## Loads some necessary packages
+training<-read.csv("./pml-training.csv",header=TRUE,sep=",",na.strings="NA")  ## Reads in the training data set
+testing<-read.csv("./pml-testing.csv",header=TRUE,sep=",",na.strings="NA")  ## Reads in the testing data set
+```
+
+We notice that both data frames have 160 variables (columns). The training data set contains 19,622 observations (rows), meanwhile the testing data set has only 20 validation cases. We further investigate the data by examining the structure of the training data using the str() function:
+
+```{r}
+str(training,list.len=5,vec.len=3)  ## Truncated summary limited to first 5 columns of the training data frame
+```
+In the full str() summary, we can see that the first 7 columns contain metadata about each measurement, the next 152 columns are the actual accelerometer values, and the last column contains the "classe" variable that we want to be able to predict. We also notice that a large number of columns are dominated by NA or missing values.
+
+<hr>
+
+**Step 2: Data Cleaning and Compression**
+
+We would really like to better understand the data set first, since it was provided without a codebook. Let's start by investigating whether or not we need to keep the columns with NA or missing variables. The following code counts the number NA values per column and stores it in the array:
+
+```{r}
+NApercol<-rep(NA,ncol(training))
+for (i in 1:ncol(training)) { NApercol[i]<-sum(is.na(training[,i])) }
+```
+
+It turns out that the 67 columns with NAs have exactly 19,216 of them. Why is that? What is similar or different about the 406 rows that do not have NA values and make up only 2.1% of the total number of observations? The following code identifies the suspect rows and reveals which column variables have nearly identical values (or zero variability):
+
+```{r, out.width = '200%'}
+suspectrow<-rep(NA,nrow(training))
+for (i in 1:nrow(training)) { suspectrow[i]<-training$new_window[i]=="yes" }
+zerovarcol<-nearZeroVar(training[suspectrow,]); names(training[zerovarcol])
+```
+
+In most cases, the variables are columns with missing values or divide by 0 errors. Only 1 column variable (training$new_window) has the same value for suspect row observations. And it turns out that this is the variable that makes these rows different! With some additional investigation, the rows where this variable is set to 'yes' appear to be summary entries, and are fundamentally different than the other 19,216 rows that are instantaneous measurements of motion. Thus, we will remove these rows (and the columns with NA values) from the training data set using the following code:
+
+```{r}
+subtrain<-training[!suspectrow,NApercol==0]
+subtest<-testing[,!NApercol]  ## Perform the same operations on the testing data set
+```
+
+Now we have 19,216 training observation and 93 variables. While inspecting our new subtrain data set, we notice that there are still a lot of missing values, so we also want to remove those columns, and we use this code to identify those columns:
+
+```{r}
+removecol<-rep(NA,ncol(subtrain))
+for (i in 1:ncol(subtrain)) { removecol[i]<-sd(subtrain[,i])==0 }
+```
+
+Finally, we are going to eliminate all of the metadata from the analysis (first 7 columns). Because we are primarily interested in classifying the type of motion recorded by the accelerometers, we do not want the model to use the metadata information to group by factors that are irrelevant to categorizing the motion (or be confused by them).
+
+```{r}
+removecol[1:7]=TRUE
+finaltrain<-subtrain[,!removecol]
+finaltest<-subtest[,!removecol]
+```
+
+Both of our final training and testing data sets now have 53 predictors and we will train our model on the 19,216 final observations in the finaltrain data frame.
+
+Note that even though we have timestamped data (that we removed in the step above), we will _not_ treat these data as a time series problem, since the motion of a new (or validation) barbell lift may start out correctly and then err towards incorrectness at any point during the lift. Also, we want to be able to identify the incorrect motion at any instantaneous moment, so that, in practice, we could indicate that the participant needs to correct his or her form as soon as he or she begins to err. Thus, we argue that the timestamped data can be analyzed as independent measurements that are unrelated to the movement at any instant before or after. In other words, as soon as the movement fits into a pattern of incorrectness identified by the model, then our machine learning program will detect it.
+
+<hr>
+
+**Exploratory Data Analysis**
+
+We can inspect the data using many plot functions, including the examples below:
+
+```{r, out.width = '50%', fig.show = "hold"}
+featurePlot(x=finaltrain[,c(grep("total",names(finaltrain)))],y=finaltrain$classe,plot="pairs",main="Comparing Predictors")
+qplot(finaltrain$total_accel_forearm,finaltrain$total_accel_dumbbell,colour=finaltrain$classe,main="Identifying Outliers")
+```
+
+In these data, we notice an outlier that is worth inspecting further. It looks a little odd compared to all other points, and might mean it will take longer for our model to converge, so we will remove it and inspect the plots above once more. Here is how we remove a single rogue row:
+
+```{r}
+outlier<-which.max(finaltrain$total_accel_forearm)  ## Find indice of the outlying point
+finaltrain<-finaltrain[-outlier,]  ## Remove this observation from the training set
+```
+
+<hr>
+
+**Pre-processing the Data**
+
+Since we have 52 predictor variables, it might be useful to try and pre-process the data with a Principle Components Analysis. Let's search to see if we have correlated predictors that we might be able to compress:
+
+```{r, echo=TRUE, eval=FALSE}
+corr<-abs(cor(finaltrain[,-53]))  ## Search for correlated predictors
+diag(corr)<-0
+which(corr>0.90,arr.ind=TRUE)
+```
+
+We have lots of similar data, so we should preprocess with PCA and use a cross-validation method.
+
+```{r, echo=FALSE, eval=FALSE}
+library(FactoMineR)
+test<-PCA(finaltrain[,-53])  ## Individual factor map (PCA)
+```
+
+```{r, out.width = '50%'}
+n<-30; pcacomps<-array(data=NA,dim=c(n,2))
+for (i in 1:n) {
+  preProc<-preProcess(finaltrain[,-53]+1,method="pca",thresh=i*(1.0-0.5)/(n+1)+0.5)
+  pcacomps[i,]<-c(preProc$numComp,100*preProc$thresh)
+}
+plot(pcacomps,xlab="Number of Components",ylab="Percent of Variance",main="How many Principle Components are Necessary?")
+abline(h=95,col="red"); abline(v=26,col="green")  ## To capture 95% variability (default)
+```
+
+It looks like 26 components is all that we need to capture 95% of the variance in the data, which is half as many components as we currently have. We will use the preProcess() function embedded within the train() function to automatically form a matrix of principal component weights at a default threshold of 95% variability captured.
+
+<hr>
+
+**Tuning a Random Forest Model**
+
+Our classes are fairly balanced, so we have decided to use a random forest model to predict the "classe" variable, and we wish to tune the relevant values using the following code:
+
+```{r}
+tuneRF(finaltrain[,-53],finaltrain[,53],mtryStart=2,ntreeTry=50,stepFactor=2,improve=0.01,trace=TRUE,plot=TRUE,doBest=TRUE)
+```
+
+It looks like trying 8 random variables at each tree split produces the best outcome, with an Out-Of-Bag error estimate of 0.3%. So we will explicitly set this parameter when we call the train() function.
+
+<hr>
+
+**Cross-validating the Data**
+
+Do we need to perform cross-validation, and if so, how many randomly resampled subsets should we take?
+
+```{r, out.width = '33%', fig.show = "hold"}
+n<-c(2,4,8,10,15,20,30); fitaccs<-array(data=NA,dim=c(n-1,4))  ## Store the fit accuracies for models with up to n cross-validations
+for (i in 1:length(n)) {
+  set.seed(12345)
+  modFit<-train(data=finaltrain,finaltrain$classe~.,method="rf",metric="Accuracy",preProcess="pca",importance=TRUE,trControl=trainControl(method="cv",p=0.7,number=n[i]),tuneGrid=data.frame(.mtry=8))
+  fitaccs[i,]<-c(n[i],100*modFit$results$Accuracy,mean(modFit$finalModel$err.rate),modFit$times$everything[[3]]/60)
+}
+plot(as.factor(fitaccs[,1]),fitaccs[,2],xlab="Number of Cross-Validations",ylab="Model Accuracy Percentage",ylim=c(95,100))
+abline(h=99,col="red")
+plot(as.factor(fitaccs[,1]),fitaccs[,3],xlab="Number of Cross-Validations",ylab="Mean Out-Of-Sample Error Rate")
+plot(as.factor(fitaccs[,1]),fitaccs[,4],xlab="Number of Cross-Validations",ylab="Computation Time (in minutes)")
+```
+
+With just 2 cross-validations, our model fit completes in just 2 minutes of total computation time with a resampling accuracy of 96.3%. Applying this model achieves 19/20 correct test predictions, or approximately 95% of the test cases are predicted accurately, as we might have expected given our estimated resampling accuracy. Therefore, we might do slightly better by increasing the number of cross-validations performed (at the expense of computation time). 
+
+With 30 cross-validations, we achieve 98.3% accuracy (an increase of 3.3%) and a mean out-of-sample error rate of 2.4%. This computation takes 25 minutes to complete, but we now correctly predict the "classe" variable for 20/20 test observations.
+
+<hr>
+
+**Out-of-Sample Errors**
+
+Our best accuracy at this point is 98.3% and our confusion matrix looks like this for the final model:
+
+```{r}
+modFit$finalModel$confusion
+````
+
+To improve our accuracy and our out-of-sample rates, we might try increasing our PCA threshold from 95% to 99%, or not performing PCA pre-processing at all. By reducing the number of components, we may save computation time, but we sacrifice accuracy and an understanding of the importance of each variable (or accelerometer measurement). For example, we can plot the importance of each predictor variable using the varImp() function, as below:
+
+```{r}
+plot(varImp(modFit))
+```
+
+The principle component with the greatest importance is PC15. But without further investigation, this component does not immediately reveal which accelerometer measurements play the largest role in determining the correctness or not of the participant's dumbbell lifts.
+
+<hr>
+
+**Predicting the Test Cases**
+
+Finally, we can predict the "classe" variable for the test observations and submit these as part 1 of this exercise.
+
+```{r}
+testpred<-predict(modFit,finaltest[,-53])
+````
+
+This analysis returns a 100% accuracy result for the test data set.
+
+<hr>
